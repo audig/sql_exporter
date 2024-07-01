@@ -374,9 +374,30 @@ func (j *Job) Run() {
 
 func (j *Job) runOnce() error {
 	doneChan := make(chan int, len(j.conns))
-
 	// execute queries for each connection in parallel
 	for _, conn := range j.conns {
+		// If we are on an rds connection we update the Auth Token
+		if strings.Contains(".rds.amazonaws.com", conn.host) {
+			sess := session.Must(session.NewSessionWithOptions(session.Options{
+				SharedConfigState: session.SharedConfigEnable,
+			}))
+			token, err := rdsutils.BuildAuthToken(conn.host, os.Getenv("AWS_REGION"), conn.user, sess.Config.Credentials)
+			if err != nil {
+				level.Error(j.log).Log("msg", "failed to parse connection url", "url", conn, "err", err)
+				continue
+			}
+			parsedURL, err := url.Parse(conn.url)
+			if err != nil {
+				fmt.Println("Erreur lors de l'analyse de l'URL:", err)
+				continue
+			}
+			if parsedURL.User != nil {
+				username := parsedURL.User.Username()
+				parsedURL.User = url.UserPassword(username, token)
+				conn.url = parsedURL.String()
+			}
+
+		}
 		go j.runOnceConnection(conn, doneChan)
 	}
 
